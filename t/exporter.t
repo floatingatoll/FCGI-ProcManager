@@ -5,7 +5,7 @@
 # General Public License, Version 2.1, a copy of which can be
 # found in the "COPYING" file of this distribution.
 
-# $Id: exporter.t,v 1.5 2001/02/09 16:16:13 muaddie Exp $
+# $Id: exporter.t,v 1.6 2001/04/23 16:13:45 muaddie Exp $
 
 use strict;
 use Test;
@@ -18,7 +18,7 @@ ok pm_parameter('n_processes',100) == 100;
 ok pm_parameter('n_processes',2) == 2;
 ok pm_parameter('n_processes',0) == 0;
 
-ok pm_manage();
+ok !pm_manage();
 
 #ok pm_parameter('n_processes',-3);
 #eval { pm_manage(); };

@@ -5,20 +5,22 @@ package FCGI::ProcManager;
 # Public License, Version 2.1.  Please read the important licensing and
 # disclaimer information included below.
 
-# $Id: ProcManager.pm,v 1.17 2001/02/09 16:15:47 muaddie Exp $
+# $Id: ProcManager.pm,v 1.23 2001/04/23 16:10:11 muaddie Exp $
 
 use strict;
 use Exporter;
+use POSIX qw(:signal_h);
 
-use vars qw($VERSION @ISA @EXPORT_OK %EXPORT_TAGS $Q);
+use vars qw($VERSION @ISA @EXPORT_OK %EXPORT_TAGS $Q $SIG_CODEREF);
 BEGIN {
-  $VERSION = '0.16';
+  $VERSION = '0.17'; 
   @ISA = qw(Exporter);
   @EXPORT_OK = qw(pm_manage pm_die pm_wait
 		  pm_write_pid_file pm_remove_pid_file
 		  pm_pre_dispatch pm_post_dispatch
   		  pm_change_process_name pm_received_signal pm_parameter 
-		  pm_warn pm_notify pm_abort pm_exit);
+		  pm_warn pm_notify pm_abort pm_exit
+		  $SIG_CODEREF);
   $EXPORT_TAGS{all} = \@EXPORT_OK;
   $FCGI::ProcManager::Default = 'FCGI::ProcManager';
 }
@@ -75,6 +77,53 @@ It is necessary for the caller, when implementing its request loop, to
 insert a call to C<pm_pre_dispatch> at the top of the loop, and then
 7C<pm_post_dispatch> at the end of the loop.
 
+=head2 Signal Handling
+
+FCGI::ProcManager attempts to do the right thing for proper shutdowns now.
+
+When it receives a SIGHUP, it sends a SIGTERM to each of its children, and
+then resumes its normal operations.   
+
+When it receives a SIGTERM, it sends a SIGTERM to each of its children, sets
+an alarm(3) "die timeout" handler, and waits for each of its children to
+die.  If all children die before this timeout, process manager exits with
+return status 0.  If all children do not die by the time the "die timeout"
+occurs, the process manager sends a SIGKILL to each of the remaining
+children, and exists with return status 1.
+
+In order to get FastCGI servers to exit upon receiving a signal, it is
+necessary to use its FAIL_ACCEPT_ON_INTR.  See FCGI.pm's description of
+FAIL_ACCEPT_ON_INTR.  Unfortunately, if you want/need to use CGI::Fast, it
+appears currently necessary to modify your installation of FCGI.pm, with
+something like the following:
+
+ -*- patch -*-
+ --- FCGI.pm     2001/03/09 01:44:00     1.1.1.3
+ +++ FCGI.pm     2001/03/09 01:47:32     1.2
+ @@ -24,7 +24,7 @@
+  *FAIL_ACCEPT_ON_INTR = sub() { 1 };
+  
+  sub Request(;***$$$) {
+ -    my @defaults = (\*STDIN, \*STDOUT, \*STDERR, \%ENV, 0, 0);
+ +    my @defaults = (\*STDIN, \*STDOUT, \*STDERR, \%ENV, 0, FAIL_ACCEPT_ON_INTR());
+      splice @defaults,0,@_,@_;
+      RequestX(@defaults);
+  }   
+ -*- end patch -*-
+
+Otherwise, if you don't, there is a loop around accept(2) which prevents
+os_unix.c OS_Accept() from returning the necessary error when FastCGI
+servers blocking on accept(2) receive the SIGTERM or SIGHUP.
+
+FCGI::ProcManager uses POSIX::sigaction() to override the default SA_RESTART
+policy used for perl's %SIG behavior.  Specifically, the process manager
+never uses SA_RESTART, while the child FastCGI servers turn off SA_RESTART
+around the accept(2) loop, but re-enstate it otherwise.
+
+The desired (and implemented) effect is to give a request as big a chance as
+possible to succeed and to delay their exits until after their request,
+while allowing the FastCGI servers waiting for new requests to die right
+away. 
 
 =head1 METHODS
 
@@ -95,17 +144,25 @@ default values.  The default parameter values currently are:
 
 sub new {
   my ($proto,$init) = @_;
+  $init ||= {};
 
   my $this = { 
 	      role => "manager",
 	      start_delay => 0,
-	      die_timeout => 60
+	      die_timeout => 60,
+	      %$init
 	     };
-  $init and %$this = %$init;
-
   bless $this, ref($proto)||$proto;
 
   $this->{PIDS} = {};
+
+  # initialize signal constructions.
+  unless ($this->no_signals()) {
+    $this->{sigaction_no_sa_restart} =
+	POSIX::SigAction->new('FCGI::ProcManager::sig_sub');
+    $this->{sigaction_sa_restart} =
+	POSIX::SigAction->new('FCGI::ProcManager::sig_sub',undef,POSIX::SA_RESTART);
+  }
 
   return $this;
 }
@@ -138,7 +195,7 @@ sub pm_manage {
   map { $this->pm_parameter($_,$values{$_}) } keys %values;
 
   # skip to handling now if we won't be managing any processes.
-  $this->n_processes() or goto HANDLING;
+  $this->n_processes() or return;
 
   # call the (possibly overloaded) management initialization hook.
   $this->role("manager");
@@ -168,7 +225,6 @@ sub pm_manage {
 	return $this->pm_abort("fork: $!");
 
       } else {
-	$this->role("server");
 	$this->{MANAGER_PID} = $manager_pid;
 	# the server exits the managing loop.
 	last MANAGING_LOOP;
@@ -213,15 +269,21 @@ sub managing_init {
   my ($this) = @_;
 
   # begin to handle signals.
-  $SIG{TERM} = sub { $this->sig_manager(@_) };
-  $SIG{HUP}  = sub { $this->sig_manager(@_) };
+  # We do NOT want SA_RESTART in the process manager.
+  # -- we want start the shutdown sequence immediately upon SIGTERM.
+  unless ($this->no_signals()) {
+    sigaction(SIGTERM, $this->{sigaction_no_sa_restart}) or
+	$this->pm_warn("sigaction: SIGTERM: $!");
+    sigaction(SIGHUP,  $this->{sigaction_no_sa_restart}) or
+	$this->pm_warn("sigaction: SIGHUP: $!");
+    $SIG_CODEREF = sub { $this->sig_manager(@_) };
+  }
 
   # change the name of this process as it appears in ps(1) output.
   $this->pm_change_process_name("perl-fcgi-pm");
 
   $this->pm_write_pid_file();
 }
-
 
 =head2 pm_die
 
@@ -242,6 +304,7 @@ sub pm_die {
   my ($this,$msg,$n) = self_or_default(@_);
 
   # stop handling signals.
+  undef $SIG_CODEREF;
   $SIG{HUP}  = 'DEFAULT';
   $SIG{TERM} = 'DEFAULT';
 
@@ -249,12 +312,15 @@ sub pm_die {
 
   # prepare to die no matter what.
   if (defined $this->die_timeout()) {
-    $SIG{ARLM} = sub { $this->pm_abort("wait timeout") };
+    $SIG{ALRM} = sub { $this->pm_abort("wait timeout") };
     alarm $this->die_timeout();
   }
 
   # send a TERM to each of the servers.
-  kill "TERM", keys %{$this->{PIDS}};
+  if (my @pids = keys %{$this->{PIDS}}) {
+    $this->pm_notify("sending TERM to PIDs, @pids");
+    kill "TERM", @pids;
+  }
 
   # wait for the servers to die.
   while (%{$this->{PIDS}}) {
@@ -334,6 +400,23 @@ sub pm_remove_pid_file {
   return $ret;
 }
 
+=head2 sig_sub
+
+ instance
+ () sig_sub(string name)
+
+DESCRIPTION:
+
+The name of this method is passed to POSIX::sigaction(), and handles signals
+for the process manager.  If $SIG_CODEREF is set, then the input arguments
+to this are passed to a call to that.
+
+=cut
+
+sub sig_sub {
+  $SIG_CODEREF->(@_) if ref $SIG_CODEREF;
+}
+
 =head2 sig_manager
 
  instance
@@ -348,9 +431,15 @@ being handled.
 
 sub sig_manager {
   my ($this,$name) = @_;
-  if ($name eq "TERM" or $name eq "HUP") {
+  if ($name eq "TERM") {
     $this->pm_notify("received signal $name");
     $this->pm_die("safe exit from signal $name");
+  } elsif ($name eq "HUP") {
+    # send a TERM to each of the servers, and pretend like nothing happened..
+    if (my @pids = keys %{$this->{PIDS}}) {
+      $this->pm_notify("sending TERM to PIDs, @pids");
+      kill "TERM", @pids;
+    }
   } else {
     $this->pm_notify("ignoring signal $name");
   }
@@ -371,8 +460,12 @@ sub handling_init {
   my ($this) = @_;
 
   # begin to handle signals.
-  $SIG{TERM} = sub { $this->sig_handler(@_) };
-  $SIG{HUP}  = sub { $this->sig_handler(@_) };
+  # We'll want accept(2) to return -1(EINTR) on caught signal..
+  unless ($this->no_signals()) {
+    sigaction(SIGTERM, $this->{sigaction_no_sa_restart}) or $this->pm_warn("sigaction: SIGTERM: $!");
+    sigaction(SIGHUP,  $this->{sigaction_no_sa_restart}) or $this->pm_warn("sigaction: SIGHUP: $!");
+    $SIG_CODEREF = sub { $this->sig_handler(@_) };
+  }
 
   # change the name of this process as it appears in ps(1) output.
   $this->pm_change_process_name("perl-fcgi");
@@ -389,6 +482,12 @@ DESCRIPTION:
 
 sub pm_pre_dispatch {
   my ($this) = self_or_default(@_);
+
+  # Now, we want the request to continue unhindered..
+  unless ($this->no_signals()) {
+    sigaction(SIGTERM, $this->{sigaction_sa_restart}) or $this->pm_warn("sigaction: SIGTERM: $!");
+    sigaction(SIGHUP,  $this->{sigaction_sa_restart}) or $this->pm_warn("sigaction: SIGHUP: $!");
+  }
 }
 
 =head2 pm_post_dispatch
@@ -410,6 +509,11 @@ sub pm_post_dispatch {
   }
   if ($this->{MANAGER_PID} and getppid() != $this->{MANAGER_PID}) {
     $this->pm_exit("safe exit: manager has died");
+  }
+  # We'll want accept(2) to return -1(EINTR) on caught signal..
+  unless ($this->no_signals()) {
+    sigaction(SIGTERM, $this->{sigaction_no_sa_restart}) or $this->pm_warn("sigaction: SIGTERM: $!");
+    sigaction(SIGHUP,  $this->{sigaction_no_sa_restart}) or $this->pm_warn("sigaction: SIGHUP: $!");
   }
 }
 

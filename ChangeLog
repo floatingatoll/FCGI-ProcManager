@@ -1,3 +1,31 @@
+2001-04-23 18:12  James Jurach  <muaddib@erf.net>
+
+	* ProcManager.pm: SIGHUP handler now issues SIGTERM to children but
+	then proceeds normally. added documentation blurb about signal
+	handling. we now use POSIX::sigaction() to avoid SA_RESTART during
+	certain regions. added re-usable POSIX::SigAction members to toggle
+	SA_RESTART. added sig_sub() -- necessary to pass name to
+	POSIX::SigAction creation. 
+
+	* README: added small blurb to consult FCGI::ProcManager
+	documentation. 
+
+	* t/exporter.t:
+	* t/procmanager.t: fixed pm_manage() test.
+
+2001-03-13 18:12  James Jurach  <muaddib@erf.net>
+
+	* ProcManager.pm: removed check for FCGI_ROLE.	now more
+	transparent when undesired.
+
+	* ProcManager.pm: detect when no FastCGI environment exists.
+
+	* ProcManager.pm: only warn and sleep -- do not abort on fork
+	failure.
+
+	* ProcManager.pm: now, we give notification to which processes we
+	send a TERM signal.
+
 2001-02-09 10:16  James Jurach  <muaddib@erf.net>
 
 	* t/: exporter.t, procmanager.t: made it easier to manage

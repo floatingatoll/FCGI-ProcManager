@@ -1,0 +1,80 @@
+2001-01-31 01:13  James Jurach  <muaddib@erf.net>
+
+	* README: more documentation
+
+	* ProcManager.pm: re-organized method layout.  separated manager
+	vs. server vs. common moved more intialization into managing_init()
+	and handling_init() created pm_die() to be called when manager
+	should die.  cleaned up error messages and notifications.
+
+	* t/: exporter.t, procmanager.t: revised test messages
+
+2001-01-30 16:35  James Jurach  <muaddib@erf.net>
+
+	* t/: exporter.t, procmanager.t: removed call to pm_state()
+
+	* ProcManager.pm: removed sleep() call after testing
+	signal-during-fork-loop
+
+2001-01-30 12:49  James Jurach  <muaddib@erf.net>
+
+	* ProcManager.pm: Cleaned up pm_manage().  removed signal
+	registration routines.	replaced by direct %SIG access.  there is
+	now a manager signal handler and a handler signal handler.  added
+	checks to die when getppid() changes.
+
+2001-01-20 02:06  James Jurach  <muaddib@erf.net>
+
+	* MANIFEST: removed Changes from MANIFEST
+
+2001-01-13 00:44  James Jurach  <muaddib@erf.net>
+
+	* t/procmanager.t: corrected various recent method name changes. 
+	removed calls to want_to_die().  added request loop hooks to
+	pm_pre_dispatch(), pm_post_dispatch().	renamed sample_handler() to
+	sample_request_loop().
+
+	* ProcManager.pm: renamed request loop hooks to pm_pre_dispatch(),
+	pm_post_dispatch().  when pm_manage() is called with
+	n_processes==0, return through goto.  renamed pre_manage_init() to
+	managing_init().  renamed post_manage_init() to handling_init(). 
+	added received_signal() to remember that a signal was received. 
+	signal handler simpler: now only notes signal and propagates
+	signal.
+
+	* t/exporter.t: this uses non-OO calling mode.
+
+	* MANIFEST: added t/exporter.t.
+
+	* Changes: ChangeLog is where per-file changes are listed.
+
+2000-12-22 05:58  James Jurach  <muaddib@erf.net>
+
+	* ProcManager.pm: corrected logic error in self_or_default(). 
+	changed all occurances of write_pid_file() to pm_write_pid_file(). 
+	changed all occurances of remove_pid_file() to
+	pm_remove_pid_file().
+
+2000-12-14 17:54  James Jurach  <muaddib@erf.net>
+
+	* ProcManager.pm: corrected state() -> pm_state() method call.
+
+2000-12-10 17:25  James Jurach  <muaddib@erf.net>
+
+	* ProcManager.pm: corrected some method renaming issues.
+
+2000-12-09 19:48  James Jurach  <muaddib@erf.net>
+
+	* t/procmanager.t: effected the changes to these subroutine names.
+
+	* ProcManager.pm: made this module OO/Exporter hybrid.	removed
+	treatment of $ENV{PROCMANAGER_PROCESSES} from constructor.  changed
+	several subroutine names.
+
+2000-12-05 22:23  James Jurach  <muaddib@erf.net>
+
+	* ProcManager.pm: made SIGHUP's do what SIGTERM's do
+
+2000-11-20  James Jurach  <muaddib@erf.net>
+
+	* Released first public version.

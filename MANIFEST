@@ -1,6 +1,7 @@
 COPYING
 MANIFEST
 MANIFEST.SKIP
+ChangeLog
 Makefile.PL
 ProcManager.pm
 README

@@ -5,7 +5,7 @@
 # General Public License, Version 2.1, a copy of which can be
 # found in the "COPYING" file of this distribution.
 
-# $Id: exporter.t,v 1.3 2001/01/31 06:57:09 muaddib Exp $
+# $Id: exporter.t,v 1.5 2001/02/09 16:16:13 muaddie Exp $
 
 use strict;
 use Test;
@@ -25,10 +25,11 @@ ok pm_manage();
 #ok $@ =~ /dying from number of processes exception: -3/;
 #undef $@;
 
-pm_parameter('n_processes',10);
-
-#pm_manage();
-#sample_request_loop();
+if ($ENV{PM_N_PROCESSES}) {
+  pm_parameter('n_processes',$ENV{PM_N_PROCESSES});
+  pm_manage();
+  sample_request_loop();
+}
 
 exit 0;
 

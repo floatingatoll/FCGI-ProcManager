@@ -5,16 +5,16 @@ package FCGI::ProcManager;
 # Public License, Version 2.1.  Please read the important licensing and
 # disclaimer information included below.
 
-# $Id: ProcManager.pm,v 1.15 2001/01/31 07:00:55 muaddib Exp $
+# $Id: ProcManager.pm,v 1.17 2001/02/09 16:15:47 muaddie Exp $
 
 use strict;
 use Exporter;
 
 use vars qw($VERSION @ISA @EXPORT_OK %EXPORT_TAGS $Q);
 BEGIN {
-  $VERSION = '0.15';
+  $VERSION = '0.16';
   @ISA = qw(Exporter);
-  @EXPORT_OK = qw(pm_manage pm_die pm_reap_server
+  @EXPORT_OK = qw(pm_manage pm_die pm_wait
 		  pm_write_pid_file pm_remove_pid_file
 		  pm_pre_dispatch pm_post_dispatch
   		  pm_change_process_name pm_received_signal pm_parameter 
@@ -33,7 +33,9 @@ BEGIN {
  # In Object-oriented style.
  use CGI::Fast;
  use FCGI::ProcManager;
- my $proc_manager = FCGI::ProcManager->new({ n_processes => 10 });
+ my $proc_manager = FCGI::ProcManager->new({
+	n_processes => 10 
+ });
  $proc_manager->pm_manage();
  while (my $cgi = CGI::Fast->new()) {
    $proc_manager->pm_pre_dispatch();
@@ -43,7 +45,8 @@ BEGIN {
 
  # This style is also supported:
  use CGI::Fast;
- use FCGI::ProcManager qw(pm_manage pm_pre_dispatch pm_post_dispatch);
+ use FCGI::ProcManager qw(pm_manage pm_pre_dispatch 
+			  pm_post_dispatch);
  pm_manage( n_processes => 10 );
  while (my $cgi = CGI::Fast->new()) {
    pm_pre_dispatch();
@@ -77,6 +80,17 @@ insert a call to C<pm_pre_dispatch> at the top of the loop, and then
 
 =head2 new
 
+ class or instance
+ (ProcManager) new([hash parameters])
+
+Constructs a new process manager.  Takes an option has of initial parameter
+values, and assigns these to the constructed object HASH, overriding any
+default values.  The default parameter values currently are:
+
+ role         => manager
+ start_delay  => 0
+ die_timeout  => 60
+
 =cut
 
 sub new {
@@ -100,12 +114,22 @@ sub new {
 
 =head2 pm_manage
 
- global
- () pm_manage(int processes_to_spawn)
+ instance or export
+ (int) pm_manage([hash parameters])
 
 DESCRIPTION:
 
-When this is called by a FastCGI script to manage application servers.
+When this is called by a FastCGI script to manage application servers.  It
+defines a sequence of instructions for a process to enter this method and
+begin forking off and managing those handlers, and it defines a sequence of
+instructions to intialize those handlers.
+
+If n_processes < 1, the managing section is subverted, and only the
+handling sequence is executed.
+
+Either returns the return value of pm_die() and/or pm_abort() (which will
+not ever return in general), or returns 1 to the calling script to begin
+handling requests.
 
 =cut
 
@@ -154,11 +178,14 @@ sub pm_manage {
     }
 
     # this should block until the next server dies.
-    $this->pm_reap_server();
+    $this->pm_wait();
 
   }# while 1
 
 HANDLING:
+
+  # forget any children we had been collecting.
+  delete $this->{PIDS};
 
   # call the (possibly overloaded) handling init hook
   $this->role("server");
@@ -171,10 +198,19 @@ HANDLING:
 
 =head2 managing_init
 
+ instance
+ () managing_init()
+
+DESCRIPTION:
+
+Overrideable method which initializes a process manager.  In order to
+handle signals, manage the PID file, and change the process name properly,
+any method which overrides this should call SUPER::managing_init().
+
 =cut
 
 sub managing_init {
-  my ($this) = self_or_default(@_);
+  my ($this) = @_;
 
   # begin to handle signals.
   $SIG{TERM} = sub { $this->sig_manager(@_) };
@@ -189,6 +225,17 @@ sub managing_init {
 
 =head2 pm_die
 
+ instance or export
+ () pm_die(string msg[, int exit_status])
+
+DESCRIPTION:
+
+This method is called when a process manager receives a notification to
+shut itself down.  pm_die() attempts to shutdown the process manager
+gently, sending a SIGTERM to each managed process, waiting die_timeout()
+seconds to reap each process, and then exit gracefully once all children
+are reaped, or to abort if all children are not reaped.
+
 =cut
 
 sub pm_die {
@@ -202,7 +249,7 @@ sub pm_die {
 
   # prepare to die no matter what.
   if (defined $this->die_timeout()) {
-    $SIG{ARLM} = sub { $this->pm_abort("reap timeout") };
+    $SIG{ARLM} = sub { $this->pm_abort("wait timeout") };
     alarm $this->die_timeout();
   }
 
@@ -211,18 +258,28 @@ sub pm_die {
 
   # wait for the servers to die.
   while (%{$this->{PIDS}}) {
-    $this->pm_reap_server();
+    $this->pm_wait();
   }
 
   # die already.
   $this->pm_exit("dying: ".$msg,$n);
 }
 
-=head2 pm_reap_server
+=head2 pm_wait
+
+ instance or export
+ (int pid) pm_wait()
+
+DESCRIPTION:
+
+This calls wait() which suspends execution until a child has exited.
+If the process ID returned by wait corresponds to a managed process,
+pm_notify() is called with the exit status of that process.
+pm_wait() returns with the return value of wait().
 
 =cut
 
-sub pm_reap_server {
+sub pm_wait {
   my ($this) = self_or_default(@_);
 
   # wait for the next server to die.
@@ -231,9 +288,19 @@ sub pm_reap_server {
   # notify when one of our servers have died.
   delete $this->{PIDS}->{$pid} and
     $this->pm_notify("server (pid $pid) exited with status $?");
+
+  return $pid;
 }
 
 =head2 pm_write_pid_file
+
+ instance or export
+ () pm_write_pid_file([string filename])
+
+DESCRIPTION:
+
+Writes current process ID to optionally specified file.  If no filename is
+specified, it uses the value of the C<pid_fname> parameter.
 
 =cut
 
@@ -250,6 +317,14 @@ sub pm_write_pid_file {
 
 =head2 pm_remove_pid_file
 
+ instance or export
+ () pm_remove_pid_file()
+
+DESCRIPTION:
+
+Removes optionally specified file.  If no filename is specified, it uses
+the value of the C<pid_fname> parameter.
+
 =cut
 
 sub pm_remove_pid_file {
@@ -261,12 +336,21 @@ sub pm_remove_pid_file {
 
 =head2 sig_manager
 
+ instance
+ () sig_manager(string name)
+
+DESCRIPTION:
+
+Handles signals of the process manager.  Takes as input the name of signal
+being handled.
+
 =cut
 
 sub sig_manager {
   my ($this,$name) = @_;
   if ($name eq "TERM" or $name eq "HUP") {
-    $this->pm_die("received signal $name");
+    $this->pm_notify("received signal $name");
+    $this->pm_die("safe exit from signal $name");
   } else {
     $this->pm_notify("ignoring signal $name");
   }
@@ -276,10 +360,15 @@ sub sig_manager {
 
 =head2 handling_init
 
+ instance or export
+ () handling_init()
+
+DESCRIPTION:
+
 =cut
 
 sub handling_init {
-  my ($this) = self_or_default(@_);
+  my ($this) = @_;
 
   # begin to handle signals.
   $SIG{TERM} = sub { $this->sig_handler(@_) };
@@ -291,6 +380,11 @@ sub handling_init {
 
 =head2 pm_pre_dispatch
 
+ instance or export
+ () pm_pre_dispatch()
+
+DESCRIPTION:
+
 =cut
 
 sub pm_pre_dispatch {
@@ -298,6 +392,11 @@ sub pm_pre_dispatch {
 }
 
 =head2 pm_post_dispatch
+
+ instance or export
+ () pm_post_dispatch()
+
+DESCRIPTION:
 
 =cut
 
@@ -309,12 +408,17 @@ sub pm_post_dispatch {
   if ($this->pm_received_signal("HUP")) {
     $this->pm_exit("safe exit after SIGHUP");
   }
-  if (getppid() != $this->{MANAGER_PID}) {
+  if ($this->{MANAGER_PID} and getppid() != $this->{MANAGER_PID}) {
     $this->pm_exit("safe exit: manager has died");
   }
 }
 
 =head2 sig_handler
+
+ instance or export
+ () sig_handler()
+
+DESCRIPTION:
 
 =cut
 
@@ -349,6 +453,11 @@ sub self_or_default {
 
 =head2 pm_change_process_name
 
+ instance or export
+ () pm_change_process_name()
+
+DESCRIPTION:
+
 =cut
 
 sub pm_change_process_name {
@@ -357,6 +466,11 @@ sub pm_change_process_name {
 }
 
 =head2 pm_received_signal
+
+ instance or export
+ () pm_received signal()
+
+DESCRIPTION:
 
 =cut
 
@@ -367,7 +481,14 @@ sub pm_received_signal {
   return $this->{SIG_RECEIVED}->{$sig};
 }
 
+=head1 parameters
+
 =head2 pm_parameter
+
+ instance or export
+ () pm_parameter()
+
+DESCRIPTION:
 
 =cut
 
@@ -389,6 +510,8 @@ sub pm_parameter {
 
 =head2 start_delay
 
+DESCRIPTION:
+
 =cut
 
 sub n_processes     { shift->pm_parameter("n_processes",     @_); }
@@ -398,7 +521,14 @@ sub die_timeout     { shift->pm_parameter("die_timeout",     @_); }
 sub role            { shift->pm_parameter("role",            @_); }
 sub start_delay     { shift->pm_parameter("start_delay",     @_); }
 
+=head1 notification and death
+
 =head2 pm_warn
+
+ instance or export
+ () pm_warn()
+
+DESCRIPTION:
 
 =cut
 
@@ -409,6 +539,11 @@ sub pm_warn {
 
 =head2 pm_notify
 
+ instance or export
+ () pm_notify()
+
+DESCRIPTION:
+
 =cut
 
 sub pm_notify {
@@ -417,19 +552,34 @@ sub pm_notify {
   print STDERR "FastCGI: ".$this->role()." (pid $$): ".$msg;
 }
 
-=head2 exit
+=head2 pm_exit
+
+ instance or export
+ () pm_exit(string msg[, int exit_status])
+
+DESCRIPTION:
 
 =cut
 
 sub pm_exit {
   my ($this,$msg,$n) = self_or_default(@_);
   $n ||= 0;
+
+  # if we still have children at this point, something went wrong.
+  # SIGKILL them now.
+  kill "KILL", keys %{$this->{PIDS}} if $this->{PIDS};
+
   $this->pm_warn($msg);
   $@ = $msg;
   exit $n;
 }
 
 =head2 pm_abort
+
+ instance or export
+ () pm_abort(string msg[, int exit_status])
+
+DESCRIPTION:
 
 =cut
 

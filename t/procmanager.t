@@ -5,7 +5,7 @@
 # General Public License, Version 2.1, a copy of which can be
 # found in the "COPYING" file of this distribution.
 
-# $Id: procmanager.t,v 1.6 2001/01/31 06:57:28 muaddib Exp $
+# $Id: procmanager.t,v 1.8 2001/02/09 16:16:13 muaddie Exp $
 
 use strict;
 use Test;
@@ -29,10 +29,11 @@ ok $m->pm_manage();
 #ok $@ =~ /dying from number of processes exception: -3/;
 #undef $@;
 
-$m->n_processes(10);
-
-#$m->pm_manage();
-#sample_request_loop($m);
+if ($ENV{PM_N_PROCESSES}) {
+  $m->n_processes($ENV{PM_N_PROCESSES});
+  $m->pm_manage();
+  sample_request_loop($m);
+}
 
 exit 0;
 

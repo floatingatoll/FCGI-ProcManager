@@ -1,0 +1,49 @@
+$Id: README,v 1.3 2000/11/15 20:14:56 muaddib Exp $
+
+General Information
+-------------------
+
+FCGI-ProcManager is a process manager for FCGI.
+
+more info later.
+
+Installation
+------------
+
+FCGI-ProcManager is expected to compile and run on all systems which
+support normal UNIX fork/wait semantics.  FCGI-ProcManager is known to
+compile and run on the following systems:
+
+ - Linux (2.0.x, 2.1.x, 2.2.x, 2.3.x)
+ - Solaris (2.5.1, 2.6, 2.7)
+ - Digital UNIX 4.0
+ - NetBSD 1.4
+
+Full installation instructions can be found in the INSTALL file.
+To build,
+
+  perl Makefile.PL
+  make all
+  make install
+
+Usage
+-----
+
+More info here later.
+
+
+Copyright
+---------
+Copyright (c) 2000, FundsXpress Financial Network, Inc.
+
+
+Disclaimer
+----------
+
+This library is free software released "AS IS WITH ALL FAULTS"
+and WITHOUT ANY WARRANTIES under the terms of the GNU Lesser
+General Public License, Version 2.1, a copy of which can be
+found in the "COPYING" file of this distribution.
+
+
+James Jurach <muaddib@erf.net>

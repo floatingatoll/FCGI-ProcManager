@@ -5,18 +5,18 @@ package FCGI::ProcManager;
 # Public License, Version 2.1.  Please read the important licensing and
 # disclaimer information included below.
 
-# $Id: ProcManager.pm,v 1.10 2000/12/16 01:34:22 muaddib Exp $
+# $Id: ProcManager.pm,v 1.12 2001/01/13 06:44:34 muaddib Exp $
 
 use strict;
 use Exporter;
-use FCGI;
 
 use vars qw($VERSION @ISA @EXPORT_OK %EXPORT_TAGS $Q @valid_states);
 BEGIN {
-  $VERSION = '0.12';
+  $VERSION = '0.14';
   @ISA = qw(Exporter);
   @EXPORT_OK = qw(pm_manage pm_parameter pm_state pm_warn pm_abort pm_exit
 		  pm_write_pid_file pm_remove_pid_file
+		  pm_pre_dispatch pm_post_dispatch
 		  pm_register_sig_handler pm_unregister_sig_handler);
   $EXPORT_TAGS{all} = \@EXPORT_OK;
   $FCGI::ProcManager::Default = 'FCGI::ProcManager';
@@ -77,7 +77,7 @@ default object if one is not passed in, e.g., a method call.
 
 sub self_or_default {
   return @_ if defined $_[0] and !ref $_[0] and $_[0] eq 'FCGI::ProcManager';
-  if (!defined $_[0] or (ref($_[0]) ne 'FCGI::ProcManager' or 
+  if (!defined $_[0] or (ref($_[0]) ne 'FCGI::ProcManager' and
 			 !UNIVERSAL::isa($_[0],'FCGI::ProcManager'))) {
     $Q or $Q = $FCGI::ProcManager::Default->new;
     unshift @_, $Q;
@@ -102,29 +102,28 @@ sub pm_manage {
   # initialize state and begin to handle signals.
   $this->pm_register_sig_handler();
 
-  # return right away if we are not managing any processes.
-  $this->n_processes() or return 1;
+  # switch to handling state right away if we are not managing any processes.
+  $this->n_processes() or goto HANDLING;
 
-  # call the (possibly overloaded) pre-manage initialization.
+  # begin the managing sequence.
   $this->pm_state("managing");
-  $this->pre_manage_init();
+
+  # call the (possibly overloaded) managing initialization.
+  $this->managing_init();
 
   # write out the pid file.
-  $this->write_pid_file();
+  $this->pm_write_pid_file();
 
   my ($pid);
   MANAGE: while (1) {
 
     # do things that we only do when we're not already managing processes..
     if (! %{$this->{PIDS}}) {
-      if (!$this->n_processes()) {
-	$this->remove_pid_file();
-	last;
-      } elsif ($this->want_to_die()) {
-	$this->remove_pid_file();
+      if ($this->received_signal()) {
+	$this->pm_remove_pid_file();
 	$this->pm_exit("Manager $$ dying from death request.\n");
       } elsif ($this->n_processes() < 0) {
-	$this->remove_pid_file();
+	$this->pm_remove_pid_file();
 	$this->pm_abort("Manager $$ dying from processes number exception: ".
 			$this->n_processes(), -( 1 + $this->n_processes()));
       }
@@ -145,67 +144,67 @@ sub pm_manage {
 
       } else {
 	# the child returns to the calling application.
-	print "$$ lasting..\n";
 	last MANAGE;
       }
     }
 
     # wait on the next child to die.
     $this->pm_abort("wait: $!\n") if ($pid = wait()) < 0;
-    $this->pm_warn("Child process $pid died with exit status $?\n");
-    delete $this->{PIDS}->{$pid}
-	or $this->pm_abort("Internal error: ".
-			   "wait() returned non-existent pid=$pid??\n");
+
+    # notify when one of our children have died.
+    delete $this->{PIDS}->{$pid} and
+      $this->pm_warn("Child process $pid died with exit status $?\n");
 
   }# while 1
 
-  # call the (possibly overloaded) post-manage initialization.
-  $this->post_manage_init();
+  HANDLING:
+  $this->pm_state("handling");
 
-  $this->pm_state("idle");
+  # call the (possibly overloaded) handling initialization.
+  $this->handling_init();
 
-  print "$$ returning..\n";
   # children and parent with n_processes == 0 return to calling app.
   return 1;
 }
 
-=head2 pre_manage_init
+=head2 managing_init
 
 =cut
 
-sub pre_manage_init {
+sub managing_init {
   my ($this) = self_or_default(@_);
 }
 
-=head2 post_manage_init
+=head2 handling_init
 
 =cut
 
-sub post_manage_init {
+sub handling_init {
   my ($this) = self_or_default(@_);
 }
 
-=head2 pre_dispatch
+=head2 pm_pre_dispatch
 
 =cut
 
-sub pre_dispatch {
+sub pm_pre_dispatch {
   my ($this) = self_or_default(@_);
-  $this->pm_state("handling");
 }
 
-=head2 post_dispatch
+=head2 pm_post_dispatch
 
 =cut
 
-sub post_dispatch {
+sub pm_post_dispatch {
   my ($this) = self_or_default(@_);
-  $this->want_to_die() and 
-    $this->pm_exit("Process $$ responding to death request.");
-  $this->pm_state("idle");
+  if (my $name = $this->received_signal()) {
+    if ($name eq "HUP" or $name eq "TERM") {
+      $this->pm_exit("Process $$ responding to $name death request.\n");
+    }
+  }
 }
 
-=head2 write_pid_file
+=head2 pm_write_pid_file
 
 =cut
 
@@ -220,7 +219,7 @@ sub pm_write_pid_file {
   close PIDFILE;
 }
 
-=head2 remove_pid_file
+=head2 pm_remove_pid_file
 
 =cut
 
@@ -243,18 +242,16 @@ sub pm_parameter {
 
 =head2 n_processes
 
-=head2 want_to_die
-
 =head2 no_signals
 
 =head2 pid_fname
 
 =cut
 
-sub n_processes { shift->pm_parameter("n_processes",@_); }
-sub want_to_die { shift->pm_parameter("want_to_die",@_); }
-sub no_signals  { shift->pm_parameter("no_signals",@_);  }
-sub pid_fname   { shift->pm_parameter("pid_fname",@_);   }
+sub n_processes     { shift->pm_parameter("n_processes",     @_); }
+sub pid_fname       { shift->pm_parameter("pid_fname",       @_); }
+sub received_signal { shift->pm_parameter("received_signal", @_); }
+sub no_signals      { shift->pm_parameter("no_signals",      @_); }
 
 =head2 pm_state
 
@@ -272,7 +269,7 @@ sub pm_state {
   return $this->{state};
 }
 
-=head2 register_sig_handler
+=head2 pm_register_sig_handler
 
 =cut
 
@@ -280,10 +277,10 @@ sub pm_register_sig_handler {
   my ($this) = self_or_default(@_);
   return if $this->no_signals();
   $SIG{TERM} = sub { $this->sig_method(@_) };
-  $SIG{HUP} = sub { $this->sig_method(@_) };
+  $SIG{HUP}  = sub { $this->sig_method(@_) };
 }
 
-=head2 unregister_sig_handler
+=head2 pm_unregister_sig_handler
 
 =cut
 
@@ -299,23 +296,17 @@ sub pm_unregister_sig_handler {
 =cut
 
 sub sig_method {
-  my ($this,$name) = self_or_default(@_);
-  if ($name eq "TERM" or $name eq "HUP") {
-    if ($this->pm_state() eq "idle") {
-      $this->pm_exit("Process $$ dying after receiving SIG$name.\n");
-    } else {
-      $this->pm_warn("Process $$ received SIG$name.  Cleaning up.\n");
-      $this->want_to_die(1);
-      $this->n_processes(-1);
-      # is the following necessary?
-      kill $name, keys %{$this->{PIDS}};
-    }
-  } else {
-    $this->pm_warn("I don't know what to do with $name yet.. ignoring?\n");
+  my ($this,$name) = @_;
+  # note which signal we've received.
+  $this->{received_signal} = $name;
+  $this->n_processes(0);
+  # propagate this signal to children.  (is this necessary?)
+  if (%{$this->{PIDS}}) {
+    kill $name, keys %{$this->{PIDS}};
   }
 }
 
-=head2 warn
+=head2 pm_warn
 
 =cut
 
@@ -336,7 +327,7 @@ sub pm_exit {
   exit $n;
 }
 
-=head2 abort
+=head2 pm_abort
 
 =cut
 

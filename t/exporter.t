@@ -5,40 +5,36 @@
 # General Public License, Version 2.1, a copy of which can be
 # found in the "COPYING" file of this distribution.
 
-# $Id: procmanager.t,v 1.4 2001/01/13 06:44:35 muaddib Exp $
+# $Id: exporter.t,v 1.1 2001/01/13 06:44:33 muaddib Exp $
 
 use strict;
 use Test;
 
-BEGIN { plan tests => 6; }
+BEGIN { plan tests => 5; }
 
-use FCGI::ProcManager;
+use FCGI::ProcManager qw(:all);
 
-my $m;
+ok pm_state() eq "idle";
 
-ok $m = FCGI::ProcManager->new();
-ok $m->pm_state() eq "idle";
+ok pm_parameter('n_processes',100) == 100;
+ok pm_parameter('n_processes',2) == 2;
+ok pm_parameter('n_processes',0) == 0;
 
-ok $m->n_processes(100) == 100;
-ok $m->n_processes(2) == 2;
-ok $m->n_processes(0) == 0;
+ok pm_manage();
 
-ok $m->pm_manage();
-
-#ok $m->n_processes(-3);
-#eval { $m->pm_manage(); };
+#ok pm_parameter('n_processes',-3);
+#eval { pm_manage(); };
 #ok $@ =~ /dying from number of processes exception: -3/;
 #undef $@;
 
-$m->n_processes(20);
+pm_parameter('n_processes',20);
 
-#$m->pm_manage();
-#sample_request_loop($m);
+#pm_manage();
+#sample_request_loop();
 
 exit 0;
 
 sub sample_request_loop {
-  my ($m) = @_;
 
   while (1) {
     # Simulate blocking for a request.
@@ -47,7 +43,7 @@ sub sample_request_loop {
     sleep $t1;
     # (Here is where accept-fail-on-intr would exit request loop.)
 
-    $m->pm_pre_dispatch();
+    pm_pre_dispatch();
 
     # Simulate a request dispatch.
     my $t = int(rand(3)+1);
@@ -57,6 +53,6 @@ sub sample_request_loop {
       last unless $t;
     }
 
-    $m->pm_post_dispatch();
+    pm_post_dispatch();
   }
 }

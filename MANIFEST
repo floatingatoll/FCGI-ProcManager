@@ -1,4 +1,3 @@
-Changes
 COPYING
 MANIFEST
 MANIFEST.SKIP
@@ -7,3 +6,4 @@ ProcManager.pm
 README
 TODO
 t/procmanager.t
+t/exporter.t

@@ -5,12 +5,22 @@ package FCGI::ProcManager;
 # Public License, Version 2.1.  Please read the important licensing and
 # disclaimer information included below.
 
-# $Id: ProcManager.pm,v 1.5 2000/11/18 07:06:09 muaddib Exp $
+# $Id: ProcManager.pm,v 1.10 2000/12/16 01:34:22 muaddib Exp $
 
 use strict;
-use vars qw(@valid_states);
+use Exporter;
+use FCGI;
+
+use vars qw($VERSION @ISA @EXPORT_OK %EXPORT_TAGS $Q @valid_states);
 BEGIN {
-  $FCGI::ProcManager::VERSION = '0.10';
+  $VERSION = '0.12';
+  @ISA = qw(Exporter);
+  @EXPORT_OK = qw(pm_manage pm_parameter pm_state pm_warn pm_abort pm_exit
+		  pm_write_pid_file pm_remove_pid_file
+		  pm_register_sig_handler pm_unregister_sig_handler);
+  $EXPORT_TAGS{all} = \@EXPORT_OK;
+  $FCGI::ProcManager::Default = 'FCGI::ProcManager';
+
   @valid_states = qw(managing handling idle);
 }
 
@@ -44,21 +54,41 @@ sub new {
   my ($proto,$init) = @_;
 
   my $this = {};
-  bless $this, ref($proto)||$proto;
-
   $init and %$this = %$init;
-  defined $this->n_processes() or
-	$this->n_processes($ENV{PROCMANAGER_PROCESSES});
+
+  bless $this, ref($proto)||$proto;
 
   $this->{PIDS} = {};
 
   return $this;
 }
 
-=head2 manage
+=head2 self_or_default
+
+ private global
+ (ProcManager, @args) self_or_default([ ProcManager, ] @args);
+
+DESCRIPTION:
+
+This is a helper subroutine to acquire or otherwise create a singleton
+default object if one is not passed in, e.g., a method call.
+
+=cut
+
+sub self_or_default {
+  return @_ if defined $_[0] and !ref $_[0] and $_[0] eq 'FCGI::ProcManager';
+  if (!defined $_[0] or (ref($_[0]) ne 'FCGI::ProcManager' or 
+			 !UNIVERSAL::isa($_[0],'FCGI::ProcManager'))) {
+    $Q or $Q = $FCGI::ProcManager::Default->new;
+    unshift @_, $Q;
+  }
+  return wantarray ? @_ : $Q;
+}
+
+=head2 pm_manage
 
  global
- () manage(int processes_to_spawn)
+ () pm_manage(int processes_to_spawn)
 
 DESCRIPTION:
 
@@ -66,17 +96,17 @@ When this is called by a FastCGI script to manage application servers.
 
 =cut
 
-sub manage {
-  my ($this) = @_;
+sub pm_manage {
+  my ($this) = self_or_default(@_);
 
   # initialize state and begin to handle signals.
-  $this->register_sig_handler();
+  $this->pm_register_sig_handler();
 
   # return right away if we are not managing any processes.
   $this->n_processes() or return 1;
 
   # call the (possibly overloaded) pre-manage initialization.
-  $this->state("managing");
+  $this->pm_state("managing");
   $this->pre_manage_init();
 
   # write out the pid file.
@@ -92,11 +122,11 @@ sub manage {
 	last;
       } elsif ($this->want_to_die()) {
 	$this->remove_pid_file();
-	$this->exit("Manager $$ dying from death request.\n");
+	$this->pm_exit("Manager $$ dying from death request.\n");
       } elsif ($this->n_processes() < 0) {
 	$this->remove_pid_file();
-	$this->abort("Manager $$ dying from number of processes exception: ".
-		     $this->n_processes(), -( 1 + $this->n_processes()));
+	$this->pm_abort("Manager $$ dying from processes number exception: ".
+			$this->n_processes(), -( 1 + $this->n_processes()));
       }
     }
 
@@ -106,12 +136,12 @@ sub manage {
       # fork.
       if ($pid = fork()) {
 	# the parent notes the child.
-	$this->warn("started process $pid\n");
+	$this->pm_warn("started process $pid\n");
 	$this->{PIDS}->{$pid} = { pid=>$pid };
 
       } elsif (! defined $pid) {
 	# handle errors um  gracefully.
-	$this->abort("fork: $!\n");
+	$this->pm_abort("fork: $!\n");
 
       } else {
 	# the child returns to the calling application.
@@ -121,18 +151,18 @@ sub manage {
     }
 
     # wait on the next child to die.
-    $this->abort("wait: $!\n") if ($pid = wait()) < 0;
-    $this->warn("Child process $pid died with exit status $?\n");
+    $this->pm_abort("wait: $!\n") if ($pid = wait()) < 0;
+    $this->pm_warn("Child process $pid died with exit status $?\n");
     delete $this->{PIDS}->{$pid}
-	or $this->abort("Internal error: ".
-			"wait() returned non-existent pid=$pid??\n");
+	or $this->pm_abort("Internal error: ".
+			   "wait() returned non-existent pid=$pid??\n");
 
   }# while 1
 
   # call the (possibly overloaded) post-manage initialization.
   $this->post_manage_init();
 
-  $this->state("idle");
+  $this->pm_state("idle");
 
   print "$$ returning..\n";
   # children and parent with n_processes == 0 return to calling app.
@@ -144,7 +174,7 @@ sub manage {
 =cut
 
 sub pre_manage_init {
-  my ($this) = @_;
+  my ($this) = self_or_default(@_);
 }
 
 =head2 post_manage_init
@@ -152,7 +182,7 @@ sub pre_manage_init {
 =cut
 
 sub post_manage_init {
-  my ($this) = @_;
+  my ($this) = self_or_default(@_);
 }
 
 =head2 pre_dispatch
@@ -160,8 +190,8 @@ sub post_manage_init {
 =cut
 
 sub pre_dispatch {
-  my ($this) = @_;
-  $this->state("handling");
+  my ($this) = self_or_default(@_);
+  $this->pm_state("handling");
 }
 
 =head2 post_dispatch
@@ -169,21 +199,21 @@ sub pre_dispatch {
 =cut
 
 sub post_dispatch {
-  my ($this) = @_;
+  my ($this) = self_or_default(@_);
   $this->want_to_die() and 
-    $this->exit("Process $$ responding to death request.");
-  $this->state("idle");
+    $this->pm_exit("Process $$ responding to death request.");
+  $this->pm_state("idle");
 }
 
 =head2 write_pid_file
 
 =cut
 
-sub write_pid_file {
-  my ($this,$fname) = @_;
+sub pm_write_pid_file {
+  my ($this,$fname) = self_or_default(@_);
   $fname ||= $this->pid_fname() or return;
   if (!open PIDFILE, ">$fname") {
-    $this->warn("open: $fname: $!\n");
+    $this->pm_warn("open: $fname: $!\n");
     return;
   }
   print PIDFILE "$$\n";
@@ -194,19 +224,19 @@ sub write_pid_file {
 
 =cut
 
-sub remove_pid_file {
-  my ($this,$fname) = @_;
+sub pm_remove_pid_file {
+  my ($this,$fname) = self_or_default(@_);
   $fname ||= $this->pid_fname() or return;
-  my $ret = unlink($fname) or $this->warn("unlink: $fname: $!\n");
+  my $ret = unlink($fname) or $this->pm_warn("unlink: $fname: $!\n");
   return $ret;
 }
 
-=head2 gen_mutator
+=head2 pm_parameter
 
 =cut
 
-sub gen_mutator {
-  my ($this,$key,$value) = @_;
+sub pm_parameter {
+  my ($this,$key,$value) = self_or_default(@_);
   defined $value and $this->{$key} = $value;
   return $this->{$key};
 }
@@ -221,20 +251,20 @@ sub gen_mutator {
 
 =cut
 
-sub n_processes { shift->gen_mutator("n_processes",@_); }
-sub want_to_die { shift->gen_mutator("want_to_die",@_); }
-sub no_signals  { shift->gen_mutator("no_signals",@_);  }
-sub pid_fname   { shift->gen_mutator("pid_fname",@_);   }
+sub n_processes { shift->pm_parameter("n_processes",@_); }
+sub want_to_die { shift->pm_parameter("want_to_die",@_); }
+sub no_signals  { shift->pm_parameter("no_signals",@_);  }
+sub pid_fname   { shift->pm_parameter("pid_fname",@_);   }
 
-=head2 state
+=head2 pm_state
 
 =cut
 
-sub state {
-  my ($this,$new_state) = @_;
+sub pm_state {
+  my ($this,$new_state) = self_or_default(@_);
   if (defined $new_state) {
     if (!grep {$new_state eq $_} @valid_states) {
-      $this->abort("Invalid state: $new_state\n");
+      $this->pm_abort("Invalid state: $new_state\n");
     }
     $this->{state} = $new_state;
   }
@@ -246,8 +276,8 @@ sub state {
 
 =cut
 
-sub register_sig_handler {
-  my ($this) = @_;
+sub pm_register_sig_handler {
+  my ($this) = self_or_default(@_);
   return if $this->no_signals();
   $SIG{TERM} = sub { $this->sig_method(@_) };
   $SIG{HUP} = sub { $this->sig_method(@_) };
@@ -257,8 +287,8 @@ sub register_sig_handler {
 
 =cut
 
-sub unregister_sig_handler {
-  my ($this) = @_;
+sub pm_unregister_sig_handler {
+  my ($this) = self_or_default(@_);
   return if $this->no_signals();
   undef $SIG{TERM};
   undef $SIG{HUP};
@@ -269,19 +299,19 @@ sub unregister_sig_handler {
 =cut
 
 sub sig_method {
-  my ($this,$name) = @_;
-  if ($name eq "TERM") {
-    if ($this->state() eq "idle") {
-      $this->exit("Process $$ dying after receiving SIG$name.\n");
+  my ($this,$name) = self_or_default(@_);
+  if ($name eq "TERM" or $name eq "HUP") {
+    if ($this->pm_state() eq "idle") {
+      $this->pm_exit("Process $$ dying after receiving SIG$name.\n");
     } else {
-      $this->warn("Process $$ received SIG$name.  Cleaning up.\n");
+      $this->pm_warn("Process $$ received SIG$name.  Cleaning up.\n");
       $this->want_to_die(1);
       $this->n_processes(-1);
       # is the following necessary?
       kill $name, keys %{$this->{PIDS}};
     }
   } else {
-    $this->warn("I don't know what to do with $name yet.. ignoring?\n");
+    $this->pm_warn("I don't know what to do with $name yet.. ignoring?\n");
   }
 }
 
@@ -289,8 +319,8 @@ sub sig_method {
 
 =cut
 
-sub warn {
-  my ($this,$msg) = @_;
+sub pm_warn {
+  my ($this,$msg) = self_or_default(@_);
   print STDERR $msg;
 }
 
@@ -298,10 +328,10 @@ sub warn {
 
 =cut
 
-sub exit {
-  my ($this,$msg,$n) = @_;
+sub pm_exit {
+  my ($this,$msg,$n) = self_or_default(@_);
   $n ||= 0;
-  $this->warn($msg);
+  $this->pm_warn($msg);
   $@ = $msg;
   exit $n;
 }
@@ -310,10 +340,10 @@ sub exit {
 
 =cut
 
-sub abort {
-  my ($this,$msg,$n) = @_;
+sub pm_abort {
+  my ($this,$msg,$n) = self_or_default(@_);
   $n ||= 1;
-  $this->exit($msg,1);
+  $this->pm_exit($msg,1);
 }
 
 1;

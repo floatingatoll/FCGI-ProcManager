@@ -5,7 +5,7 @@
 # General Public License, Version 2.1, a copy of which can be
 # found in the "COPYING" file of this distribution.
 
-# $Id: procmanager.t,v 1.2 2000/11/10 01:09:48 muaddib Exp $
+# $Id: procmanager.t,v 1.3 2000/12/10 01:48:58 muaddib Exp $
 
 use strict;
 use Test;
@@ -23,24 +23,24 @@ ok $m->n_processes(100) == 100;
 ok $m->n_processes(2) == 2;
 ok $m->n_processes(0) == 0;
 
-ok $m->manage();
+ok $m->pm_manage();
 ok $m->want_to_die(1);
 
 # i'm not sure how to test these
-#eval { $m->manage(); };
+#eval { $m->pm_manage(); };
 #ok $@ =~ /dying from death request/;
 #undef $@;
 
 ok $m->want_to_die(0) == 0;
 
 #ok $m->n_processes(-3);
-#eval { $m->manage(); };
+#eval { $m->pm_manage(); };
 #ok $@ =~ /dying from number of processes exception: -3/;
 #undef $@;
 
 $m->n_processes(1);
 
-#$m->manage();
+#$m->pm_manage();
 #sample_handler($m);
 
 exit 0;

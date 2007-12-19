@@ -8,3 +8,4 @@ README
 TODO
 t/procmanager.t
 t/exporter.t
+META.yml                                 Module meta-data (added by MakeMaker)

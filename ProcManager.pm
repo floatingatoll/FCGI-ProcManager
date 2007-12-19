@@ -13,7 +13,7 @@ use POSIX qw(:signal_h);
 
 use vars qw($VERSION @ISA @EXPORT_OK %EXPORT_TAGS $Q $SIG_CODEREF);
 BEGIN {
-  $VERSION = '0.17'; 
+  $VERSION = '0.18'; 
   @ISA = qw(Exporter);
   @EXPORT_OK = qw(pm_manage pm_die pm_wait
 		  pm_write_pid_file pm_remove_pid_file
@@ -205,10 +205,6 @@ sub pm_manage {
   my $manager_pid = $$;
 
  MANAGING_LOOP: while (1) {
-
-    # if the calling process goes away, perform cleanup.
-    getppid() == 1 and
-      return $this->pm_die("calling process has died");
 
     $this->n_processes() > 0 or
       return $this->pm_die();
@@ -703,6 +699,14 @@ No known bugs, but this does not mean no bugs exist.
 =head1 SEE ALSO
 
 L<FCGI>.
+
+=head1 MAINTAINER
+
+Gareth Kirwan <gbjk@thermeon.com>
+
+=head1 AUTHOR
+
+James E Jurach Jr.
 
 =head1 COPYRIGHT
 

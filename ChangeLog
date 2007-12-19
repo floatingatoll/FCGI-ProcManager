@@ -1,3 +1,14 @@
+0.17
+
+	* ProcManager.pm: Remove constraint that process can't change pid.
+	  This resolves the daemon exiting after first child dies
+	  if the process id of the daemon has changed since starting.
+	  This commonly happens when a script waits to check for the
+	  socket being available and working before forking and exitting.
+	  It can also happen in a race condition of fork && exit when
+	  the exit is delayed until after the forked child has already
+	  spawned the fastcgi handlers.
+
 2001-04-23 18:12  James Jurach  <muaddib@erf.net>
 
 	* ProcManager.pm: SIGHUP handler now issues SIGTERM to children but

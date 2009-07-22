@@ -13,7 +13,7 @@ use POSIX qw(:signal_h);
 
 use vars qw($VERSION @ISA @EXPORT_OK %EXPORT_TAGS $Q $SIG_CODEREF);
 BEGIN {
-  $VERSION = '0.18'; 
+  $VERSION = '0.19'; 
   @ISA = qw(Exporter);
   @EXPORT_OK = qw(pm_manage pm_die pm_wait
 		  pm_write_pid_file pm_remove_pid_file
@@ -139,6 +139,7 @@ default values.  The default parameter values currently are:
  role         => manager
  start_delay  => 0
  die_timeout  => 60
+ pm_title => 'perl-fcgi-pm'
 
 =cut
 
@@ -150,6 +151,7 @@ sub new {
 	      role => "manager",
 	      start_delay => 0,
 	      die_timeout => 60,
+        pm_title => 'perl-fcgi-pm',
 	      %$init
 	     };
   bless $this, ref($proto)||$proto;
@@ -276,7 +278,7 @@ sub managing_init {
   }
 
   # change the name of this process as it appears in ps(1) output.
-  $this->pm_change_process_name("perl-fcgi-pm");
+  $this->pm_change_process_name($this->pm_parameter('pm_title'));
 
   $this->pm_write_pid_file();
 }
